@@ -1,3 +1,4 @@
+// Locally modified for setup-vps security build; see SECURITY_PATCHES.md.
 // Command ssh-alertd watches sshd logs and sends an alert on every successful
 // SSH login. Backends are pluggable; Telegram and SMTP are implemented today.
 package main
@@ -15,18 +16,30 @@ import (
 	"ssh-alertd/internal/config"
 	"ssh-alertd/internal/monitor"
 	"ssh-alertd/internal/notifier"
+	"ssh-alertd/internal/redact"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/ssh-alertd/config.json", "path to the JSON config file")
+	showVersion := flag.Bool("version", false, "print build identity as JSON and exit")
 	flag.Parse()
+	if *showVersion {
+		if err := printBuildInfo(os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
-	logger := log.New(os.Stderr, "ssh-alertd ", log.LstdFlags|log.Lmsgprefix)
+	logger := log.New(redact.NewWriter(os.Stderr), "ssh-alertd ", log.LstdFlags|log.Lmsgprefix)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Fatalf("config: %v", err)
 	}
+
+	writer := redact.NewWriter(os.Stderr, cfg.Notifiers.Telegram.BotToken, cfg.Notifiers.SMTP.Password)
+	logger.SetOutput(writer)
+	log.SetOutput(writer)
 
 	hostname := cfg.Hostname
 	if hostname == "" {

@@ -10,6 +10,8 @@ ssh-alertd
 /build/
 
 # Go test & coverage artifacts
+__pycache__/
+*.pyc
 *.test
 *.out
 coverage.*

@@ -2,32 +2,62 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'fix/**', 'ci/**']
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  check-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOWORK: 'off'
+      GOPROXY: 'off'
+      GOSUMDB: 'off'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Build
-        run: go build ./...
-      - name: Check formatting
+      - name: Create private scratch directory
         run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:" >&2
-            echo "$unformatted" >&2
-            exit 1
-          fi
+          scratch="$(mktemp -d "$RUNNER_TEMP/ssh-alertd.XXXXXX")"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+          cache: false
+      - name: Formatting, vet, race and release-policy tests
+        run: python3 -I -B scripts/check.py
+      - name: Build and verify both architectures
+        run: python3 -I -B scripts/release.py build --output dist
+      - name: Test the actual amd64 release binary
+        run: |
+          IFS= read -r version < VERSION
+          SSH_ALERTD_BINARY="$PWD/dist/ssh-alertd-${version}-linux-amd64" python3 -I -B tests/runtime-test.py
+      - name: Keep verified preview artifacts (not a release)
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+          include-hidden-files: false

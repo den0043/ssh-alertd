@@ -1,6 +1,14 @@
-# ssh-alertd
+# ssh-alertd — security-hardening fork
 
-[![CI](https://github.com/Amekiri-Studio/ssh-alertd/actions/workflows/ci.yml/badge.svg)](https://github.com/Amekiri-Studio/ssh-alertd/actions/workflows/ci.yml)
+**[Русская инструкция](docs/README.ru.md)** · [Security changes and limitations](SECURITY_PATCHES.md)
+
+This fork is based on Amekiri-Studio/ssh-alertd. The source includes local security
+fixes; it is not an unmodified upstream release. No hardened release is published
+yet. CI and draft-release automation are prepared and locally tested, but have
+not run on GitHub yet. See [release guide](docs/RELEASING.md). The other
+translated READMEs are upstream documentation, not verified fork instructions.
+
+[![CI](https://github.com/den0043/ssh-alertd/actions/workflows/ci.yml/badge.svg)](https://github.com/den0043/ssh-alertd/actions/workflows/ci.yml)
 
 **English** · [简体中文](docs/README.zh-CN.md) · [繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md)
 
@@ -36,54 +44,35 @@ internal/
 Data flow: `Source` (journald/file) → `Monitor` parses "Accepted ..." lines →
 `Dispatcher` fans each `LoginEvent` out to all enabled `Notifier`s concurrently.
 
-## Install
+## Build and test this fork
 
-### Arch Linux (AUR)
-
-- [`ssh-alertd`](https://aur.archlinux.org/packages/ssh-alertd) — stable release
-- [`ssh-alertd-git`](https://aur.archlinux.org/packages/ssh-alertd-git) — latest git
+Use the exact toolchain in `.go-version` (Go 1.27.3) and Python 3.9+.
+Set `TMPDIR` to a private scratch directory. From a clean, committed checkout:
 
 ```sh
-yay -S ssh-alertd        # or: paru -S ssh-alertd
+python3 -I -B scripts/check.py
+python3 -I -B scripts/release.py build --output dist
+IFS= read -r version < VERSION
+SSH_ALERTD_BINARY="$PWD/dist/ssh-alertd-${version}-linux-amd64" python3 -I -B tests/runtime-test.py
 ```
 
-### Debian / Ubuntu
+The builder creates static amd64/arm64 executables, tarballs, `BUILDINFO.json`,
+`LICENSES.txt` and `SHA256SUMS`. It validates both ELF architectures, archive
+contents and hashes; the native binary also reports its embedded version,
+commit, source state and Go toolchain using `-version` without reading a config.
+Dirty sources are refused by default. `--allow-dirty` is for local experiments;
+such files cannot pass ordinary release verification.
 
-Download the `.deb` for your architecture from the
-[latest release](https://github.com/Amekiri-Studio/ssh-alertd/releases/latest):
+A matching `v<VERSION>` tag runs tests and builds, then creates a **draft
+prerelease**, not a public/latest release. Manual dispatch only builds artifacts.
+The draft job downloads its assets and compares their bytes to the verified
+local build. Publishing is a separate human action; see
+[RELEASING.md](docs/RELEASING.md). No hardening release is published yet.
 
-```sh
-sudo apt install ./ssh-alertd_*_amd64.deb
-```
-
-### Other Linux
-
-Grab a standalone `linux-amd64` / `linux-arm64` tarball from the
-[releases](https://github.com/Amekiri-Studio/ssh-alertd/releases/latest), or
-build from source (below).
-
-## Build
-
-```sh
-go build -o ssh-alertd .
-go test ./...
-```
-
-## Releases
-
-Pushing a `v*` tag triggers the [Release workflow](.github/workflows/release.yml),
-which builds and attaches to the GitHub Release:
-
-- `.deb` packages for `amd64` and `arm64`
-- standalone `linux-amd64` / `linux-arm64` tarballs (binary + unit + example config)
-- a `SHA256SUMS` checksum file
-
-```sh
-git tag -a v0.1.3 -m "v0.1.3" && git push --follow-tags
-```
-
-Keep the version in `packaging/archlinux/PKGBUILD` and
-`packaging/debian/changelog` in step with the tag.
+Legacy Debian/Arch packaging is excluded from the fork workflow; the old Debian
+builder is disabled pending a separate package-installation audit. Do not use
+upstream packages expecting them to contain fork fixes. Go is needed to build,
+not to run the static executable. SHA256 is integrity checking, not a signature.
 
 ## Configure
 
@@ -117,16 +106,10 @@ chat ID.
 - To a group (for multiple recipients): add the bot to the group and send a
   message there.
 
-Then open this URL in a browser (replace `<TOKEN>` with your token):
-
-```
-https://api.telegram.org/bot<TOKEN>/getUpdates
-```
-
-Find `"chat":{"id":...}` in the returned JSON. A private chat is a positive
-number (e.g. `987654321`); a group is negative (supergroups often start with
-`-100`, e.g. `-1001234567890`). If a group returns no updates, disable privacy
-mode via `/setprivacy` in BotFather and send the message again.
+Use an already known chat ID or obtain it through a trusted tool that reads the
+token interactively. Do not put a real bot token into a browser URL, command-line
+argument, shell history, screenshot or repository. These instructions never need
+your real token in chat.
 
 **3. Fill in `config.json`**
 
@@ -148,18 +131,15 @@ mode via `/setprivacy` in BotFather and send the message again.
 
 **4. Verify**
 
-Send one message by hand first to confirm the token/chat_id are correct:
+Use the saved root-owned config for a test. The Russian guide shows a Python
+POST that does not put the token in argv or expose network exception URLs.
+A successful API response is not proof of the whole SSH-to-Telegram pipeline:
+open a genuinely new SSH authentication from your client and check the alert.
+Do not reuse a multiplexed connection for that verification.
 
-```sh
-curl -s "https://api.telegram.org/bot<TOKEN>/sendMessage" \
-  -d chat_id=<CHAT_ID> -d text="ssh-alertd test"
-```
-
-`"ok":true` means the config is correct; you will then receive an alert on the
-next real SSH login.
-
-> ⚠️ `config.json` contains the bot token. Set `chmod 600` and keep it out of
-> git.
+`/etc/ssh-alertd` must be root:ssh-alertd 0750 and `config.json` must be
+root:ssh-alertd 0640 for the dedicated service: readable, not writable, by it.
+Never commit a real config or share unredacted logs.
 
 #### Custom message (optional)
 
@@ -275,7 +255,7 @@ sudo install -d /etc/ssh-alertd
 sudo install -m0640 config.example.json /etc/ssh-alertd/config.json   # then edit
 sudo install -m0644 deploy/ssh-alertd.service /etc/systemd/system/ssh-alertd.service
 
-# Create the dedicated ssh-alertd user and give it ownership of the config.
+# Create the dedicated user; keep config owned by root, readable by the group.
 sudo install -Dm644 deploy/ssh-alertd.sysusers /usr/lib/sysusers.d/ssh-alertd.conf
 sudo install -Dm644 deploy/ssh-alertd.tmpfiles /usr/lib/tmpfiles.d/ssh-alertd.conf
 sudo systemd-sysusers
@@ -285,8 +265,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ssh-alertd
 ```
 
-The service runs as the dedicated `ssh-alertd` user, which owns the config and
-belongs to `systemd-journal` for the journald source. For the `file` source,
+The service runs as the dedicated `ssh-alertd` user. The config belongs to
+root:ssh-alertd and is not writable by the service. It has supplementary
+`systemd-journal` membership for the journald source. For the `file` source,
 also grant it read access to the auth log (see Privileges below).
 
 ## Privileges
@@ -314,9 +295,10 @@ tail -n5 /var/log/auth.log                # file source
 The unit runs as the dedicated system user **`ssh-alertd`** (created from
 `deploy/ssh-alertd.sysusers` by systemd-sysusers) and is granted read access to
 the journal via `SupplementaryGroups=systemd-journal` — so **the journald source
-needs no extra authorization when started via systemd**. That user also takes
-ownership of `/etc/ssh-alertd/config.json` via `deploy/ssh-alertd.tmpfiles`, so
-it can read the token (the file stays `0640`, unreadable to other local users).
+needs no extra authorization when started via systemd**. The fork tmpfiles rules
+keep `/etc/ssh-alertd` root:ssh-alertd 0750 and `config.json` root:ssh-alertd 0640:
+the service can read the token but cannot rewrite the config. Inspect any local
+`/etc/tmpfiles.d/ssh-alertd.conf` overrides on an existing installation.
 
 > The Arch / Debian packages install these two files and trigger
 > sysusers/tmpfiles automatically. For a manual systemd deployment, run once:
@@ -374,9 +356,12 @@ successful login produces `detected SSH login: ...` and
    journalctl -t sshd -t sshd-session -n5    # journald source
    tail -n5 /var/log/auth.log                # file source
    ```
-2. Confirm sshd is actually logging logins: `ssh localhost` once and check
-   whether `Accepted password/publickey for ...` appears in the command above.
-3. For the `file` source, check that `log_source.path` is correct
+2. Open a genuinely new authentication from your normal SSH client (not a reused
+   multiplexed connection) and check for `Accepted ... ssh2` in the journal. Do
+   not install extra keys or enable password login merely to test localhost.
+3. Journald records also need trusted `_UID=0` and an absolute `_EXE` ending in
+   `sshd` or `sshd-session`. A matching syslog identifier alone is not trusted.
+   For the `file` source, check that `log_source.path` is correct
    (`/var/log/auth.log` on Debian/Ubuntu, `/var/log/secure` on RHEL/CentOS).
 4. On a few distros sshd's syslog identifier is neither `sshd` nor
    `sshd-session`, so the journald source filters it out; switch to the `file`
@@ -384,25 +369,16 @@ successful login produces `detected SSH login: ...` and
 
 **No Telegram message (`notifier telegram failed` in the log)**
 
-The error includes the Telegram API response. Common cases:
+HTTP errors deliberately report only a numeric status. Full URLs, response
+bodies and arbitrary transport errors are not logged because they may contain
+the bot token. Redirects are not followed. Common status codes are 401/404 for
+credentials or endpoint issues, 400 for a bad request/chat, and 403 for denied
+access. Check the chat and credentials locally without printing them.
 
-- `status 401` / `404`: wrong `bot_token` — re-check it with BotFather.
-- `status 400 ... chat not found`: wrong `chat_id`, or you never messaged the
-  bot — Start/message it, then fetch the id again via `getUpdates`; a group id is
-  negative, don't drop the `-100` prefix.
-- `status 403 ... bot was blocked`: you blocked the bot — unblock it.
-- `send request: ... timeout / no such host`: the server can't reach
-  `api.telegram.org` (restricted network) — set `api_base` to your reverse proxy.
-
-A quick curl test separates a "credential problem" from a "program problem":
-
-```sh
-curl -s "https://api.telegram.org/bot<TOKEN>/sendMessage" \
-  -d chat_id=<CHAT_ID> -d text="ssh-alertd test"
-```
-
-`"ok":true` means the credentials are fine; on `"ok":false` the `description`
-field explains why.
+See the Russian guide for a safe saved-config test. Network/TLS/timeouts are
+reported without raw exception text. The daemon has no persistent queue,
+journal cursor, replay or Telegram retry: downtime and network failures can lose
+alerts. Restarting monitoring does not recover missed events.
 
 ## Adding a new notifier
 

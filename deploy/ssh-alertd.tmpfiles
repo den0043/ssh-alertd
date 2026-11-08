@@ -1,5 +1,4 @@
-# Hand the config directory and file to the ssh-alertd user so the daemon can
-# read its bot token while keeping the file unreadable to other local users.
+# Locally hardened fork: root owns the config; the service group can read it.
 # Installed to /usr/lib/tmpfiles.d/ssh-alertd.conf; applied by systemd-tmpfiles.
-z /etc/ssh-alertd             0750 ssh-alertd ssh-alertd -
-z /etc/ssh-alertd/config.json 0640 ssh-alertd ssh-alertd -
+z /etc/ssh-alertd             0750 root ssh-alertd -
+z /etc/ssh-alertd/config.json 0640 root ssh-alertd -
