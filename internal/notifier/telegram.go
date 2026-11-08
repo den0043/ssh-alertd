@@ -1,13 +1,15 @@
+// Locally modified for setup-vps security build; see SECURITY_PATCHES.md.
 package notifier
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	htmltemplate "html/template"
-	"io"
+	"net"
 	"net/http"
 	"strings"
 	texttemplate "text/template"
@@ -68,8 +70,11 @@ func NewTelegram(o TelegramOptions) (*Telegram, error) {
 		chatID:    o.ChatID,
 		apiBase:   strings.TrimRight(apiBase, "/"),
 		parseMode: reqParseMode,
-		client:    &http.Client{Timeout: 15 * time.Second},
-		render:    render,
+		client: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		render: render,
 	}, nil
 }
 
@@ -157,19 +162,30 @@ func (t *Telegram) Send(ctx context.Context, e event.LoginEvent) error {
 	url := fmt.Sprintf("%s/bot%s/sendMessage", t.apiBase, t.botToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return errors.New("build telegram request failed")
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		// net/http errors include the request URL (and the bot token).
+		// Do not return/wrap arbitrary transport errors, even url.Error.Err:
+		// proxy/TLS errors can include URLs and server-controlled content.
+		if ctx.Err() != nil {
+			return fmt.Errorf("send telegram request: %w", ctx.Err())
+		}
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			return fmt.Errorf("send telegram request timed out: %w", context.DeadlineExceeded)
+		}
+		return errors.New("send telegram request failed (transport or TLS error)")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("telegram api status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		// Response bodies and status text may echo credentials. Log only the
+		// numeric status; never include an untrusted response snippet.
+		return fmt.Errorf("telegram api status %d", resp.StatusCode)
 	}
 	return nil
 }

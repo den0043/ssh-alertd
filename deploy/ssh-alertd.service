@@ -6,11 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/ssh-alertd -config /etc/ssh-alertd/config.json
-Restart=on-failure
+Restart=always
 RestartSec=5
 
-# Runs as a dedicated system user (created via sysusers.d) that owns
-# /etc/ssh-alertd/config.json (set up by tmpfiles.d) and belongs to
+# Locally hardened fork: dedicated user has read-only config access.
+# root:ssh-alertd owns the config (tmpfiles.d); the service belongs to
 # systemd-journal so the journald log source works. For the "file" source, also
 # grant read access to the auth log (e.g. add group "adm" on Debian/Ubuntu).
 User=ssh-alertd
