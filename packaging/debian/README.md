@@ -1,4 +1,9 @@
-# Debian / Ubuntu package
+# Debian / Ubuntu package (legacy upstream reference)
+
+> **Not part of the security fork release.** This historical packaging has not
+> passed a fork installation audit. Use the static assets built by
+> `scripts/release.py`; see `docs/RELEASING.md`.
+> The legacy Debian builder is disabled to avoid restoring service-owned config.
 
 A self-contained `.deb` builder for ssh-alertd. It stages the file tree and runs
 `dpkg-deb` directly — no debhelper / `dpkg-buildpackage` toolchain required.

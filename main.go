@@ -21,7 +21,14 @@ import (
 
 func main() {
 	configPath := flag.String("config", "/etc/ssh-alertd/config.json", "path to the JSON config file")
+	showVersion := flag.Bool("version", false, "print build identity as JSON and exit")
 	flag.Parse()
+	if *showVersion {
+		if err := printBuildInfo(os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
 	logger := log.New(redact.NewWriter(os.Stderr), "ssh-alertd ", log.LstdFlags|log.Lmsgprefix)
 

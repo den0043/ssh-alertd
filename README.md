@@ -4,7 +4,8 @@
 
 This fork is based on Amekiri-Studio/ssh-alertd. The source includes local security
 fixes; it is not an unmodified upstream release. No hardened release is published
-yet. Release automation is inherited and will be reviewed separately. The other
+yet. CI and draft-release automation are prepared and locally tested, but have
+not run on GitHub yet. See [release guide](docs/RELEASING.md). The other
 translated READMEs are upstream documentation, not verified fork instructions.
 
 [![CI](https://github.com/den0043/ssh-alertd/actions/workflows/ci.yml/badge.svg)](https://github.com/den0043/ssh-alertd/actions/workflows/ci.yml)
@@ -45,25 +46,33 @@ Data flow: `Source` (journald/file) â†’ `Monitor` parses "Accepted ..." lines â†
 
 ## Build and test this fork
 
-A security-hardened fork release is not published yet. Do not install an upstream
-package expecting it to contain these changes. The existing release workflow and
-package metadata have not yet been adapted or verified for this fork.
-
-With a compatible Go toolchain (the fork is locally tested with Go 1.27.3):
+Use the exact toolchain in `.go-version` (Go 1.27.3) and Python 3.9+.
+Set `TMPDIR` to a private scratch directory. From a clean, committed checkout:
 
 ```sh
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -o ssh-alertd .
-# Set TMPDIR to a private scratch directory before the runtime checks.
-SSH_ALERTD_BINARY="$PWD/ssh-alertd" python3 -I -B tests/runtime-test.py
+python3 -I -B scripts/check.py
+python3 -I -B scripts/release.py build --output dist
+IFS= read -r version < VERSION
+SSH_ALERTD_BINARY="$PWD/dist/ssh-alertd-${version}-linux-amd64" python3 -I -B tests/runtime-test.py
 ```
 
-For now, keep artifacts local. Only publish a versioned release after reviewing
-CI, release permissions, package contents and checksums. See `SECURITY_PATCHES.md`
-for tests and delivery limitations. Go is only required to build from source,
-not to run a future prebuilt static binary.
+The builder creates static amd64/arm64 executables, tarballs, `BUILDINFO.json`,
+`LICENSES.txt` and `SHA256SUMS`. It validates both ELF architectures, archive
+contents and hashes; the native binary also reports its embedded version,
+commit, source state and Go toolchain using `-version` without reading a config.
+Dirty sources are refused by default. `--allow-dirty` is for local experiments;
+such files cannot pass ordinary release verification.
+
+A matching `v<VERSION>` tag runs tests and builds, then creates a **draft
+prerelease**, not a public/latest release. Manual dispatch only builds artifacts.
+The draft job downloads its assets and compares their bytes to the verified
+local build. Publishing is a separate human action; see
+[RELEASING.md](docs/RELEASING.md). No hardening release is published yet.
+
+Legacy Debian/Arch packaging is excluded from the fork workflow; the old Debian
+builder is disabled pending a separate package-installation audit. Do not use
+upstream packages expecting them to contain fork fixes. Go is needed to build,
+not to run the static executable. SHA256 is integrity checking, not a signature.
 
 ## Configure
 

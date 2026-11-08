@@ -1,123 +1,101 @@
-name: Release
+name: Build release draft
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to build without the leading v (e.g. 0.1.2)'
-        required: true
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  # Resolve the version once (from the tag, or the manual-dispatch input) and
-  # gate the build on tests passing.
-  meta:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.v.outputs.version }}
+  check-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOWORK: 'off'
+      GOPROXY: 'off'
+      GOSUMDB: 'off'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - id: v
+      - name: Create private scratch directory
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          scratch="$(mktemp -d "$RUNNER_TEMP/ssh-alertd.XXXXXX")"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+          cache: false
+      - name: Formatting, vet, race and release-policy tests
+        run: python3 -I -B scripts/check.py
+      - name: Build and verify versioned assets
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ -n "$RELEASE_TAG" ]; then
+            python3 -I -B scripts/release.py build --output dist --tag "$RELEASE_TAG"
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            python3 -I -B scripts/release.py build --output dist
           fi
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go vet ./...
-      - run: go test ./...
-
-  deb:
-    needs: [meta, test]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64, arm64]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Build .deb (${{ matrix.arch }})
-        env:
-          ARCH: ${{ matrix.arch }}
+      - name: Test the actual amd64 release binary
         run: |
-          cd packaging/debian
-          ./build.sh "${{ needs.meta.outputs.version }}"
-      - uses: actions/upload-artifact@v4
+          IFS= read -r version < VERSION
+          SSH_ALERTD_BINARY="$PWD/dist/ssh-alertd-${version}-linux-amd64" python3 -I -B tests/runtime-test.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: deb-${{ matrix.arch }}
-          path: packaging/debian/*.deb
+          name: release-${{ github.sha }}
+          path: dist/
           if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+          include-hidden-files: false
 
-  binaries:
-    needs: [meta, test]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64, arm64]
+  draft:
+    needs: check-and-build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Create private scratch directory
+        run: |
+          scratch="$(mktemp -d "$RUNNER_TEMP/ssh-alertd.XXXXXX")"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Build standalone tarball (${{ matrix.arch }})
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.sha }}
+          path: dist/
+          digest-mismatch: error
+      - name: Verify, create a draft, download and compare exact bytes
         env:
-          GOARCH: ${{ matrix.arch }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          V="${{ needs.meta.outputs.version }}"
-          name="ssh-alertd-${V}-linux-${{ matrix.arch }}"
-          mkdir -p "dist/$name"
-          CGO_ENABLED=0 GOARCH="${{ matrix.arch }}" go build -trimpath \
-            -ldflags "-s -w" -o "dist/$name/ssh-alertd" .
-          cp README.md LICENSE config.example.json "dist/$name/"
-          cp deploy/ssh-alertd.service deploy/ssh-alertd.sysusers \
-             deploy/ssh-alertd.tmpfiles "dist/$name/"
-          mkdir -p "dist/$name/templates"
-          cp examples/email/*.tmpl examples/telegram/*.tmpl "dist/$name/templates/"
-          tar -C dist -czf "dist/${name}.tar.gz" "$name"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.arch }}
-          path: dist/*.tar.gz
-          if-no-files-found: error
-
-  release:
-    needs: [deb, binaries]
-    runs-on: ubuntu-latest
-    # Only publish a Release for real tag pushes, not manual dispatch test builds.
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Collect files and checksums
-        run: |
-          mkdir -p out
-          find artifacts -type f \( -name '*.deb' -o -name '*.tar.gz' \) \
-            -exec cp {} out/ \;
-          cd out
-          sha256sum * > SHA256SUMS
-          echo "::group::Release files"
-          ls -l
-          cat SHA256SUMS
-          echo "::endgroup::"
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: out/*
-          generate_release_notes: true
+          python3 -I -B scripts/publish_draft.py --directory dist \
+            --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT"

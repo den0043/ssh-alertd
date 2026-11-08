@@ -1,4 +1,8 @@
-# Arch Linux package
+# Arch Linux package (legacy upstream reference)
+
+> **Not part of the security fork release.** This historical packaging has not
+> passed a fork installation audit. Do not use it as the fork installer.
+> Use the static assets built by `scripts/release.py`; see `docs/RELEASING.md`.
 
 A `makepkg`-based package for ssh-alertd.
 

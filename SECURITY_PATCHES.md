@@ -62,6 +62,24 @@ ownership as described below; release automation is a separate work stage.
 - Root compromise or a malicious executable run as root under the allowed
   basename is outside this provenance filter's threat model.
 
+## Versioned fork releases
+
+- `.go-version` pins the build toolchain; `VERSION` is the only release version.
+- The builder embeds version, source commit and clean/dirty state; `-version`
+  returns JSON before reading configuration or starting any log follower.
+- CI and tag workflows run formatting, vet, race tests, release-policy tests,
+  cross-build verification and native runtime tests before artifacts are used.
+- Only the isolated draft job has contents:write. Actions use full commit SHAs;
+  event data is not interpolated into shell source. Manual dispatch cannot publish.
+- The publisher requires the exact tag/commit, creates a draft prerelease,
+  reads it back, downloads and byte-compares assets; it never auto-publishes,
+  creates a missing tag or overwrites an existing release. API tests are mocks.
+- Legacy Debian/Arch packaging is not a fork release artifact; the old Debian
+  builder is disabled pending a separate installation audit.
+- See docs/RELEASING.md. Local checks do not prove a successful GitHub run or
+  published release. SHA256 is not a signature; immutable settings/review are
+  separate repository controls.
+
 ## Regression checks
 
 The tests use only local fixtures, controlled child test binaries, and
